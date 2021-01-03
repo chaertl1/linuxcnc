@@ -75,6 +75,9 @@ class _IStat(object):
         self.QTVCP_LOG_HISTORY_PATH = self.INI.find('DISPLAY', 'LOG_FILE') or '~/qtvcp.log'
         self.MACHINE_LOG_HISTORY_PATH = self.INI.find('DISPLAY', 'MACHINE_LOG_PATH') or '~/.machine_log_history'
         self.PREFERENCE_PATH = self.INI.find("DISPLAY","PREFERENCE_FILE_PATH") or None
+        self.PROGRAM_PREFIX = self.get_error_safe_setting("DISPLAY","PROGRAM_PREFIX", '~/linuxcnc/nc_files')
+        if not os.path.exists(os.path.expanduser(self.PROGRAM_PREFIX)):
+            log.warning('Path not valid in INI File [DISPLAY] PROGRAM_PREFIX section')
         self.SUB_PATH = (self.INI.find("RS274NGC", "SUBROUTINE_PATH")) or None
         if self.SUB_PATH is not None:
             for mpath in (self.SUB_PATH.split(':')):
@@ -87,9 +90,12 @@ class _IStat(object):
             self.MACRO_PATH = None
         self.INI_MACROS = self.INI.findall("DISPLAY", "MACRO")
         self.MACHINE_IS_LATHE = bool(self.INI.find("DISPLAY", "LATHE"))
+
         extensions = self.INI.findall("FILTER", "PROGRAM_EXTENSION")
         self.PROGRAM_FILTERS = ([e.split(None, 1) for e in extensions]) or None
         self.PROGRAM_FILTERS_EXTENSIONS = self.get_filters_extensions()
+        self.VALID_PROGRAM_EXTENSIONS = self.get_all_valid_extensions()
+
         self.PARAMETER_FILE = (self.INI.find("RS274NGC", "PARAMETER_FILE")) or None
         try:
             # check the ini file if UNITS are set to mm"
@@ -150,6 +156,17 @@ class _IStat(object):
                 aa = self.INI.find('AXIS_%s'% letter.upper(), 'MAX_ACCELERATION') or None
                 if av is None or aa is None:
                     log.critical('MISSING [AXIS_{}] MAX VeLOCITY or MAX ACCELERATION entry in INI file.'.format(letter.upper()))
+
+        # convert joint number to axis index
+        # used by dro_widget
+        self.GET_AXIS_INDEX_FROM_JOINT_NUM = {}
+        self.GET_JOINT_NUM_FROM_AXIS_INDEX = {}
+        for i in self.AVAILABLE_JOINTS:
+            let = self.GET_NAME_FROM_JOINT[i][0]
+            axisnum = "XYZABCUVW".index(let)
+            self.GET_AXIS_INDEX_FROM_JOINT_NUM[int(i)] = int(axisnum)
+            self.GET_JOINT_NUM_FROM_AXIS_INDEX[int(axisnum)] = int(i)
+
         self.NO_HOME_REQUIRED = int(self.INI.find("TRAJ", "NO_FORCE_HOMING") or 0)
 
         # home all check
@@ -165,10 +182,15 @@ class _IStat(object):
             self.JOINT_SEQUENCE_LIST[j] = int(seq)
         # joint sequence/type
         self.JOINT_TYPE = [None] * jointcount
+        self.JOINT_TYPE_INT = [None] * jointcount
         self.JOINT_SEQUENCE = [None] * jointcount
         for j in range(jointcount):
             section = "JOINT_%d" % j
             self.JOINT_TYPE[j] = self.INI.find(section, "TYPE") or "LINEAR"
+            if self.JOINT_TYPE[j] == "LINEAR" :
+                self.JOINT_TYPE_INT[j] = 1
+            else:
+                self.JOINT_TYPE_INT[j] = 2
             self.JOINT_SEQUENCE[j]  = int(self.INI.find(section, "HOME_SEQUENCE") or 0)
 
         # jog syncronized sequence
@@ -394,23 +416,38 @@ class _IStat(object):
         else:
             return None
 
+    def get_all_valid_extensions(self):
+        temp = []
+        try:
+            for i in(self.PROGRAM_FILTERS):
+                for q in i[0].split(','):
+                        temp.append('{}'.format(q))
+            if not '.ngc' in temp:
+                temp.append('.ngc')
+            return temp
+        except Exception as e:
+            log.warning('Valid Extension Parsing Error: {}\n Using Default: *'.format(e))
+            return ('*')
+
     def get_filters_extensions(self):
-        all_extensions = [("*.ngc")]
+        all_extensions = []
         try:
             for k, v in self.PROGRAM_FILTERS:
-                each = k.split(',')
-                for i in each:
-                    i = i.replace('.','*.')
-                    i = i.replace(',',' ')
-                    all_extensions.append( ('%s'%(i)) )
-            all_extensions.append(('*'))
+                k = k.replace('.',' *.')
+                k = k.replace(' ','')
+                temp =[]
+                for q in k.split(','):
+                    temp.append('{}'.format(q))
+                all_extensions.append( ['{}'.format(v),temp] )
+            all_extensions.append(['All (*)', ['*']])
             return all_extensions
-        except:
-            return ('*.ngc','*')
+        except Exception as e:
+            log.warning('filter Extension Parsing Error: {}\n Using Default: ALL (*)'.format(e))
+            return [['All (*)',['*']]]
 
     # get filter extensions in QT format
-    def get_qt_filter_extensions(self,):
-        all_extensions = [("G code (*.ngc)")]
+    def get_qt_filter_extensions(self):
+        all_extensions = []
         try:
             for k, v in self.PROGRAM_FILTERS:
                 k = k.replace('.',' *.')
@@ -421,8 +458,17 @@ class _IStat(object):
             for i in all_extensions:
                 temp = '%s %s'%(temp ,i)
             return temp
-        except:
+        except Exception as e:
+            log.warning('Qt filter Extension Parsing Error: {}\n Using Default: ALL (*)'.format(e))
             return ('All (*)')
+
+    def program_extension_valid(self, fname):
+        filename, file_extension = os.path.splitext(fname)
+        if '*' in self.VALID_PROGRAM_EXTENSIONS:
+            return True
+        elif file_extension.lower() in (self.VALID_PROGRAM_EXTENSIONS):
+            return True
+        return False
 
     def __getitem__(self, item):
         return getattr(self, item)

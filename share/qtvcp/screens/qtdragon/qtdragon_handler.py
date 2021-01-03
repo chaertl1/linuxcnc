@@ -56,7 +56,7 @@ class HandlerClass:
         self.min_spindle_rpm = INFO.MIN_SPINDLE_SPEED
         self.max_spindle_rpm = INFO.MAX_SPINDLE_SPEED
         self.system_list = ["G54","G55","G56","G57","G58","G59","G59.1","G59.2","G59.3"]
-        self.tab_index_code = (0, 1, 2, 3, 0, 0, 2, 0, 0, 0)
+        self.tab_index_code = (0, 1, 2, 3, 0, 0, 2, 0, 0, 0, 0)
         self.slow_jog_factor = 10
         self.reload_tool = 0
         self.last_loaded_program = ""
@@ -113,6 +113,7 @@ class HandlerClass:
         self.init_preferences()
         self.init_widgets()
         self.init_probe()
+        self.init_utils()
         self.w.stackedWidget_log.setCurrentIndex(0)
         self.w.stackedWidget.setCurrentIndex(0)
         self.w.stackedWidget_dro.setCurrentIndex(0)
@@ -120,8 +121,7 @@ class HandlerClass:
         self.w.btn_dimensions.setChecked(True)
         self.w.btn_touch_sensor.setEnabled(self.w.chk_use_tool_sensor.isChecked())
         self.w.page_buttonGroup.buttonClicked.connect(self.main_tab_changed)
-        self.w.filemanager.onUserClicked()    
-        self.w.filemanager_usb.onMediaClicked()
+        self.w.filemanager_usb.showMediaDir(quiet = True)
         self.chk_run_from_line_checked(self.w.chk_run_from_line.isChecked())
         self.chk_use_camera_changed(self.w.chk_use_camera.isChecked())
         self.chk_alpha_mode_clicked(self.w.chk_alpha_mode.isChecked())
@@ -164,6 +164,14 @@ class HandlerClass:
                     self.w.web_view.setHtml(self.html)
         except Exception as e:
             print("No default setup file found - {}".format(e))
+
+    def init_utils(self):
+        from qtvcp.lib.gcode_utility.facing import Facing
+        self.facing = Facing()
+        self.w.layout_facing.addWidget(self.facing)
+        from qtvcp.lib.gcode_utility.hole_circle import Hole_Circle
+        self.hole_circle = Hole_Circle()
+        self.w.layout_hole_circle.addWidget(self.hole_circle)
 
     #############################
     # SPECIAL FUNCTIONS SECTION #
@@ -268,6 +276,8 @@ class HandlerClass:
         self.w.gcode_editor.hide()
         self.w.filemanager.list.setAlternatingRowColors(False)
         self.w.filemanager_usb.list.setAlternatingRowColors(False)
+        self.w.filemanager_usb.showList()
+
         if INFO.MACHINE_IS_METRIC:
             self.w.lbl_tool_sensor_B2W.setText('INCH')
             self.w.lbl_tool_sensor_B2S.setText('INCH')
@@ -351,9 +361,9 @@ class HandlerClass:
 
             if flag:
                 if isinstance(receiver2, GCODE):
-                    # if in manual do our keybindings - otherwise
+                    # if in manual or in readonly mode do our keybindings - otherwise
                     # send events to gcode widget
-                    if STATUS.is_man_mode() == False:
+                    if STATUS.is_man_mode() == False or not receiver2.isReadOnly():
                         if is_pressed:
                             receiver.keyPressEvent(event)
                             event.accept()
@@ -368,21 +378,10 @@ class HandlerClass:
 
         if event.isAutoRepeat():return True
 
-        # ok if we got here then try keybindings
-        try:
-            KEYBIND.call(self,event,is_pressed,shift,cntrl)
-            event.accept()
-            return True
-        except NameError as e:
-            if is_pressed:
-                LOG.debug('Exception in KEYBINDING: {}'.format (e))
-                self.add_status('Exception in KEYBINDING: {}'.format (e))
-        except Exception as e:
-            if is_pressed:
-                LOG.debug('Exception in KEYBINDING:', exc_info=e)
-                print ('Error in, or no function for: %s in handler file for-%s'%(KEYBIND.convert(event),key))
-        event.accept()
-        return True
+        # ok if we got here then try keybindings function calls
+        # KEYBINDING will call functions from handler file as
+        # registered by KEYBIND.add_call(KEY,FUNCTION) above
+        return KEYBIND.manage_function_calls(self,event,is_pressed,key,shift,cntrl)
 
     #########################
     # CALLBACKS FROM STATUS #
@@ -799,10 +798,10 @@ class HandlerClass:
     def load_code(self, fname):
         if fname is None: return
         filename, file_extension = os.path.splitext(fname)
-        if '*'+ file_extension.lower() not in (INFO.PROGRAM_FILTERS_EXTENSIONS):
-            self.add_status("Unknown or invalid filename extension {}".format(file_extension))
-            return
         if not fname.endswith(".html"):
+            if not (INFO.program_extension_valid(fname)):
+                self.add_status("Unknown or invalid filename extension {}".format(file_extension))
+                return
             self.w.cmb_gcode_history.addItem(fname)
             self.w.cmb_gcode_history.setCurrentIndex(self.w.cmb_gcode_history.count() - 1)
             ACTION.OPEN_PROGRAM(fname)
